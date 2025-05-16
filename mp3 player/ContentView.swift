@@ -152,15 +152,8 @@ struct ContentView: View {
                     .frame(height: 100)
                     .padding(.horizontal)
 
-<<<<<<< HEAD
                 Button("Stop") {
                     visualizer.stop()
-=======
-                    Button("pls Stop") {
-                        stopPlayback()
-                    }
-                    .disabled(audioPlayer == nil)
->>>>>>> a5d3e02e84ae7ba7835b1adbd83bc0298ad57d19
                 }
                 .padding()
 
