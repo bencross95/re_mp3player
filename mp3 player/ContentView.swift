@@ -44,7 +44,7 @@ struct ContentView: View {
                     }
                     .disabled(audioPlayer == nil)
 
-                    Button("Stop") {
+                    Button("pls Stop") {
                         stopPlayback()
                     }
                     .disabled(audioPlayer == nil)
