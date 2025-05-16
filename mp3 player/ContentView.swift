@@ -1,53 +1,159 @@
 import SwiftUI
 import AVFoundation
+import Accelerate
 
-struct ContentView: View {
-    @State private var mp3Files: [URL] = []
-    @State private var selectedFile: URL?
-    @State private var audioPlayer: AVAudioPlayer?
-    @State private var isPlaying = false
+// MARK: - Audio Visualizer Logic
+
+class AudioVisualizerModel: ObservableObject {
+    @Published var waveformPoints: [CGFloat] = Array(repeating: 0, count: 100)
+
+    private var engine = AVAudioEngine()
+    private var player = AVAudioPlayerNode()
+    private let bufferSize = 1024
+
+    func play(url: URL) {
+        stop()
+
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(forReading: url)
+        } catch {
+            print("Could not open file: \(error)")
+            return
+        }
+
+        let format = file.processingFormat
+
+        engine = AVAudioEngine()
+        player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        player.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
+            self?.processBuffer(buffer)
+        }
+
+        do {
+            try engine.start()
+            player.scheduleFile(file, at: nil, completionHandler: nil)
+            player.play()
+        } catch {
+            print("Engine failed to start: \(error)")
+        }
+    }
+
+    func stop() {
+        player.stop()
+        engine.stop()
+        waveformPoints = Array(repeating: 0, count: waveformPoints.count)
+    }
+
+    private func processBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData?[0] else { return }
+        let frameLength = Int(buffer.frameLength)
+
+        var points: [CGFloat] = []
+        let step = max(frameLength / waveformPoints.count, 1)
+
+        for i in stride(from: 0, to: frameLength, by: step) {
+            let chunk = UnsafeBufferPointer(start: channelData + i, count: min(step, frameLength - i))
+            var rms: Float = 0
+            vDSP_rmsqv(chunk.baseAddress!, 1, &rms, vDSP_Length(chunk.count))
+            points.append(CGFloat(rms))
+        }
+
+        DispatchQueue.main.async {
+            self.waveformPoints = points
+        }
+    }
+}
+
+// MARK: - Waveform Line View
+
+struct WaveformLineView: View {
+    var samples: [CGFloat]
 
     var body: some View {
-        
-        
-        HStack {
-            VStack {
-                Text("Loaded from ~/Music")
-                    .font(.caption)
-                    .padding()
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            let width = geometry.size.width
+            let step = width / CGFloat(samples.count - 1)
 
-                List(mp3Files, id: \.self, selection: $selectedFile) { file in
-                    Text(file.lastPathComponent)
-                        .onTapGesture {
-                            loadMP3(url: file)
-                        }
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: height / 2))
+
+                for index in samples.indices {
+                    let x = CGFloat(index) * step
+                    let normalized = min(samples[index], 1.0) // normalize if needed
+                    let y = height / 2 - (normalized * height / 2)
+                    path.addLine(to: CGPoint(x: x, y: y))
                 }
-                .frame(minWidth: 200)
+            }
+            .stroke(Color.accentColor, lineWidth: 2)
+        }
+    }
+}
+
+// MARK: - Main App View
+
+struct ContentView: View {
+    @State private var currentDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music")
+    @State private var directoryContents: [URL] = []
+    @State private var selectedFile: URL?
+    @ObservedObject private var visualizer = AudioVisualizerModel()
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                HStack {
+                    Button("Go Up") {
+                        goUpDirectory()
+                    }
+                    .disabled(currentDirectory.pathComponents.count <= FileManager.default.homeDirectoryForCurrentUser.pathComponents.count + 1)
+
+                    Text(currentDirectory.lastPathComponent)
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal)
+
+                List(directoryContents, id: \.self) { file in
+                    HStack {
+                        Image(systemName: isDirectory(file) ? "folder" : "music.note")
+                        Text(file.lastPathComponent)
+                    }
+                    .onTapGesture {
+                        if isDirectory(file) {
+                            currentDirectory = file
+                            loadContents()
+                        } else if file.pathExtension.lowercased() == "mp3" {
+                            selectedFile = file
+                            visualizer.play(url: file)
+                        }
+                    }
+                }
+                .frame(minWidth: 250)
             }
 
             Divider()
 
             VStack {
                 if let file = selectedFile {
-                    Text(file.lastPathComponent)
+                    Text("Now Playing: \(file.lastPathComponent)")
                         .font(.headline)
-                        .padding()
+                        .padding(.top)
                 } else {
                     Text("Select an MP3")
                         .foregroundColor(.gray)
-                        .padding()
+                        .padding(.top)
                 }
 
-                HStack {
-                    Button(isPlaying ? "Pause" : "Play") {
-                        togglePlayback()
-                    }
-                    .disabled(audioPlayer == nil)
+                WaveformLineView(samples: visualizer.waveformPoints)
+                    .frame(height: 100)
+                    .padding(.horizontal)
 
-                    Button("Stop") {
-                        stopPlayback()
-                    }
-                    .disabled(audioPlayer == nil)
+                Button("Stop") {
+                    visualizer.stop()
                 }
                 .padding()
 
@@ -55,56 +161,40 @@ struct ContentView: View {
             }
             .frame(minWidth: 300)
         }
-        .frame(width: 600, height: 400)
+        .frame(width: 750, height: 450)
         .onAppear {
-            loadMP3sFromDefaultFolder()
+            loadContents()
         }
     }
 
-    func loadMP3sFromDefaultFolder() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let defaultFolder = home.appendingPathComponent("Music")
+    func isDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        return isDir.boolValue
+    }
 
+    func loadContents() {
         do {
-            let files = try FileManager.default.contentsOfDirectory(at: defaultFolder, includingPropertiesForKeys: nil)
-            self.mp3Files = files.filter { $0.pathExtension.lowercased() == "mp3" }
+            let contents = try FileManager.default.contentsOfDirectory(at: currentDirectory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+            self.directoryContents = contents.sorted { a, b in
+                let aIsDir = isDirectory(a)
+                let bIsDir = isDirectory(b)
+                if aIsDir == bIsDir {
+                    return a.lastPathComponent.lowercased() < b.lastPathComponent.lowercased()
+                }
+                return aIsDir && !bIsDir
+            }
         } catch {
-            print("Failed to load MP3s: \(error)")
+            print("Error reading directory: \(error)")
+            directoryContents = []
         }
     }
 
-    func loadMP3(url: URL) {
-        do {
-            audioPlayer = try AVAudioPlayer(contentsOf: url)
-            audioPlayer?.prepareToPlay()
-            audioPlayer?.play()
-            isPlaying = true
-        } catch {
-            print("Failed to play audio: \(error)")
-            isPlaying = false
-        }
-    }
-
-    func togglePlayback() {
-        guard let player = audioPlayer else { return }
-        if player.isPlaying {
-            player.pause()
-            isPlaying = false
-        } else {
-            player.play()
-            isPlaying = true
-        }
-    }
-
-    func stopPlayback() {
-        audioPlayer?.stop()
-        audioPlayer = nil
-        isPlaying = false
+    func goUpDirectory() {
+        currentDirectory.deleteLastPathComponent()
+        loadContents()
     }
 }
-
-
-
 
 #Preview {
     ContentView()
