@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import Accelerate
 
-// MARK: - Audio Visualizer Logic
+// MARK: - Audio Visualizer
 
 class AudioVisualizerModel: ObservableObject {
     @Published var waveformPoints: [CGFloat] = Array(repeating: 0, count: 100)
@@ -14,31 +14,24 @@ class AudioVisualizerModel: ObservableObject {
     func play(url: URL) {
         stop()
 
-        let file: AVAudioFile
         do {
-            file = try AVAudioFile(forReading: url)
-        } catch {
-            print("Could not open file: \(error)")
-            return
-        }
+            let file = try AVAudioFile(forReading: url)
+            let format = file.processingFormat
 
-        let format = file.processingFormat
+            engine = AVAudioEngine()
+            player = AVAudioPlayerNode()
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: format)
 
-        engine = AVAudioEngine()
-        player = AVAudioPlayerNode()
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+            player.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
+                self?.processBuffer(buffer)
+            }
 
-        player.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
-            self?.processBuffer(buffer)
-        }
-
-        do {
             try engine.start()
-            player.scheduleFile(file, at: nil, completionHandler: nil)
+            player.scheduleFile(file, at: nil)
             player.play()
         } catch {
-            print("Engine failed to start: \(error)")
+            print("Playback error: \(error)")
         }
     }
 
@@ -68,7 +61,7 @@ class AudioVisualizerModel: ObservableObject {
     }
 }
 
-// MARK: - Waveform Line View
+// MARK: - Waveform View
 
 struct WaveformLineView: View {
     var samples: [CGFloat]
@@ -84,8 +77,7 @@ struct WaveformLineView: View {
 
                 for index in samples.indices {
                     let x = CGFloat(index) * step
-                    let normalized = min(samples[index], 1.0) // normalize if needed
-                    let y = height / 2 - (normalized * height / 2)
+                    let y = height / 2 - (min(samples[index], 1.0) * height / 2)
                     path.addLine(to: CGPoint(x: x, y: y))
                 }
             }
@@ -94,107 +86,169 @@ struct WaveformLineView: View {
     }
 }
 
-// MARK: - Main App View
+// MARK: - FileNode Model
+
+struct FileNode: Identifiable {
+    let id = UUID()
+    let url: URL
+    let isDirectory: Bool
+}
+
+// MARK: - Main View
 
 struct ContentView: View {
-    @State private var currentDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music")
-    @State private var directoryContents: [URL] = []
-    @State private var selectedFile: URL?
     @ObservedObject private var visualizer = AudioVisualizerModel()
+    @State private var columnStack: [[FileNode]] = []
+    @State private var selectedFile: URL?
+    @State private var lastColumnCount: Int = 0
+    @State private var rootDirectory: URL = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!
+
+    func openFolderPicker() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.title = "Select Root Folder"
+        return panel.runModal() == .OK ? panel.url : nil
+    }
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading) {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Button("Go Up") {
-                        goUpDirectory()
-                    }
-                    .disabled(currentDirectory.pathComponents.count <= FileManager.default.homeDirectoryForCurrentUser.pathComponents.count + 1)
-
-                    Text(currentDirectory.lastPathComponent)
-                        .font(.caption)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal)
-
-                List(directoryContents, id: \.self) { file in
-                    HStack {
-                        Image(systemName: isDirectory(file) ? "folder" : "music.note")
-                        Text(file.lastPathComponent)
-                    }
-                    .onTapGesture {
-                        if isDirectory(file) {
-                            currentDirectory = file
-                            loadContents()
-                        } else if file.pathExtension.lowercased() == "mp3" {
-                            selectedFile = file
-                            visualizer.play(url: file)
+                    Button("Choose Root Folder…") {
+                        if let selected = openFolderPicker() {
+                            rootDirectory = selected
+                            loadDirectoryContents(at: selected, replacingFromLevel: 0)
                         }
                     }
+                    .padding(.horizontal)
+
+                    Text("Current: \(rootDirectory.lastPathComponent)")
+                        .font(.caption)
+                        .foregroundColor(.gray)
                 }
-                .frame(minWidth: 250)
+
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        HStack(alignment: .top, spacing: 1) {
+                            ForEach(Array(columnStack.enumerated()), id: \.offset) { (level, nodes) in
+                                ScrollView {
+                                    LazyVStack(alignment: .leading, spacing: 4) {
+                                        ForEach(nodes) { node in
+                                            HStack {
+                                                Image(systemName: node.isDirectory ? "folder" : "music.note")
+                                                Text(node.url.lastPathComponent)
+                                                    .lineLimit(1)
+                                            }
+                                            .padding(6)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(Color(NSColor.controlBackgroundColor))
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                handleSelection(node, at: level)
+                                            }
+                                        }
+                                    }
+                                    .padding(.horizontal, 4)
+                                }
+                                .frame(width: 200)
+                                .background(Color(NSColor.windowBackgroundColor))
+                                .cornerRadius(4)
+                                .shadow(radius: 1)
+                                .id(level)
+                            }
+                        }
+                        .padding(.vertical)
+                    }
+                    .background(
+                        GeometryReader { _ in
+                            Color.clear
+                                .onChange(of: columnStack.map(\.count)) { _ in
+                                    let newCount = columnStack.count
+                                    if newCount > lastColumnCount {
+                                        withAnimation {
+                                            scrollProxy.scrollTo(newCount - 1, anchor: .trailing)
+                                        }
+                                    }
+                                    lastColumnCount = newCount
+                                }
+                        }
+                    )
+                }
             }
 
             Divider()
 
-            VStack {
+            VStack(spacing: 8) {
                 if let file = selectedFile {
                     Text("Now Playing: \(file.lastPathComponent)")
-                        .font(.headline)
-                        .padding(.top)
+                        .font(.subheadline)
+                        .padding(.top, 4)
+
+                    WaveformLineView(samples: visualizer.waveformPoints)
+                        .frame(height: 60)
+                        .padding(.horizontal)
+
+                    Button("Stop") {
+                        visualizer.stop()
+                        selectedFile = nil
+                    }
+                    .padding(.bottom, 8)
                 } else {
-                    Text("Select an MP3")
+                    Text("Select an MP3 file")
                         .foregroundColor(.gray)
-                        .padding(.top)
+                        .padding(.top, 6)
                 }
-
-                WaveformLineView(samples: visualizer.waveformPoints)
-                    .frame(height: 100)
-                    .padding(.horizontal)
-
-                Button("Stop") {
-                    visualizer.stop()
-                }
-                .padding()
 
                 Spacer()
             }
             .frame(minWidth: 300)
         }
-        .frame(width: 750, height: 450)
+        .frame(height: 300)
         .onAppear {
-            loadContents()
+            loadDirectoryContents(at: rootDirectory, replacingFromLevel: 0)
         }
     }
 
-    func isDirectory(_ url: URL) -> Bool {
-        var isDir: ObjCBool = false
-        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        return isDir.boolValue
+    func handleSelection(_ node: FileNode, at level: Int) {
+        if node.isDirectory {
+            loadDirectoryContents(at: node.url, replacingFromLevel: level + 1)
+        } else if node.url.pathExtension.lowercased() == "mp3" {
+            selectedFile = node.url
+            visualizer.play(url: node.url)
+        }
     }
 
-    func loadContents() {
+    func loadDirectoryContents(at url: URL, replacingFromLevel level: Int) {
         do {
-            let contents = try FileManager.default.contentsOfDirectory(at: currentDirectory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-            self.directoryContents = contents.sorted { a, b in
-                let aIsDir = isDirectory(a)
-                let bIsDir = isDirectory(b)
-                if aIsDir == bIsDir {
-                    return a.lastPathComponent.lowercased() < b.lastPathComponent.lowercased()
-                }
-                return aIsDir && !bIsDir
-            }
-        } catch {
-            print("Error reading directory: \(error)")
-            directoryContents = []
-        }
-    }
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
 
-    func goUpDirectory() {
-        currentDirectory.deleteLastPathComponent()
-        loadContents()
+            let nodes: [FileNode] = contents.compactMap { url in
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+                    return FileNode(url: url, isDirectory: isDir.boolValue)
+                }
+                return nil
+            }
+            .sorted {
+                if $0.isDirectory == $1.isDirectory {
+                    return $0.url.lastPathComponent.lowercased() < $1.url.lastPathComponent.lowercased()
+                }
+                return $0.isDirectory && !$1.isDirectory
+            }
+
+            columnStack = Array(columnStack.prefix(level)) + [nodes]
+        } catch {
+            print("Failed to read directory: \(error)")
+        }
     }
 }
+
 
 #Preview {
     ContentView()
