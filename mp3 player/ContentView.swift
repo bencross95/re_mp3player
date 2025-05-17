@@ -8,37 +8,107 @@ class AudioVisualizerModel: ObservableObject {
     @Published var waveformPoints: [CGFloat] = Array(repeating: 0, count: 100)
 
     private var engine = AVAudioEngine()
-    private var player = AVAudioPlayerNode()
+    private var _player: AVAudioPlayerNode?
     private let bufferSize = 1024
+    private var _duration: TimeInterval = 1
+    private var currentURL: URL?
+    private var currentVolume: Float = 1.0
 
-    func play(url: URL) {
+    var activePlayer: AVAudioPlayerNode? {
+        _player
+    }
+
+    var currentTime: TimeInterval {
+        guard let node = _player,
+              let lastRenderTime = node.lastRenderTime,
+              let playerTime = node.playerTime(forNodeTime: lastRenderTime) else { return 0 }
+        return Double(playerTime.sampleTime) / playerTime.sampleRate
+    }
+
+    var duration: TimeInterval {
+        _duration
+    }
+
+    func play(url: URL, startAt time: TimeInterval = 0) {
         stop()
+        currentURL = url
 
         do {
             let file = try AVAudioFile(forReading: url)
             let format = file.processingFormat
 
             engine = AVAudioEngine()
-            player = AVAudioPlayerNode()
-            engine.attach(player)
-            engine.connect(player, to: engine.mainMixerNode, format: format)
+            _player = AVAudioPlayerNode()
+            engine.attach(_player!)
+            engine.connect(_player!, to: engine.mainMixerNode, format: format)
 
-            player.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
+            _player!.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
                 self?.processBuffer(buffer)
             }
 
             try engine.start()
-            player.scheduleFile(file, at: nil)
-            player.play()
+
+            let sampleRate = format.sampleRate
+            let startSampleTime = AVAudioFramePosition(time * sampleRate)
+            _duration = file.duration
+
+            _player!.scheduleSegment(file, startingFrame: startSampleTime,
+                                     frameCount: AVAudioFrameCount(file.length) - AVAudioFrameCount(startSampleTime), at: nil)
+            _player!.volume = currentVolume
+            _player!.play()
         } catch {
             print("Playback error: \(error)")
         }
     }
 
     func stop() {
-        player.stop()
+        _player?.stop()
         engine.stop()
         waveformPoints = Array(repeating: 0, count: waveformPoints.count)
+    }
+
+    func togglePlayback() {
+        guard let player = _player else { return }
+        player.isPlaying ? player.pause() : player.play()
+    }
+
+    func setVolume(_ volume: Float) {
+        currentVolume = volume
+        _player?.volume = volume
+    }
+
+    func seek(to time: TimeInterval) {
+        guard let url = currentURL else { return }
+
+        do {
+            let file = try AVAudioFile(forReading: url)
+            let format = file.processingFormat
+
+            engine.stop()
+            _player?.stop()
+            engine.detach(_player!)
+
+            _player = AVAudioPlayerNode()
+            engine.attach(_player!)
+            engine.connect(_player!, to: engine.mainMixerNode, format: format)
+
+            _player!.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
+                self?.processBuffer(buffer)
+            }
+
+            try engine.start()
+
+            let sampleRate = format.sampleRate
+            let startSampleTime = AVAudioFramePosition(time * sampleRate)
+            _duration = file.duration
+
+            _player!.scheduleSegment(file, startingFrame: startSampleTime,
+                                     frameCount: AVAudioFrameCount(file.length) - AVAudioFrameCount(startSampleTime), at: nil)
+            _player!.volume = currentVolume
+            _player!.play()
+        } catch {
+            print("Seek failed: \(error)")
+        }
     }
 
     private func processBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -61,6 +131,12 @@ class AudioVisualizerModel: ObservableObject {
     }
 }
 
+extension AVAudioFile {
+    var duration: TimeInterval {
+        Double(length) / processingFormat.sampleRate
+    }
+}
+
 // MARK: - Waveform View
 
 struct WaveformLineView: View {
@@ -74,7 +150,6 @@ struct WaveformLineView: View {
 
             Path { path in
                 path.move(to: CGPoint(x: 0, y: height / 2))
-
                 for index in samples.indices {
                     let x = CGFloat(index) * step
                     let y = height / 2 - (min(samples[index], 1.0) * height / 2)
@@ -102,6 +177,11 @@ struct ContentView: View {
     @State private var selectedFile: URL?
     @State private var lastColumnCount: Int = 0
     @State private var rootDirectory: URL = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!
+    @State private var currentTime: TimeInterval = 0
+    @State private var duration: TimeInterval = 1
+    @State private var isSeeking: Bool = false
+    @State private var isPlaying: Bool = false
+    @State private var currentVolume: Float = 1.0
 
     func openFolderPicker() -> URL? {
         let panel = NSOpenPanel()
@@ -114,101 +194,158 @@ struct ContentView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Button("Choose Root Folder…") {
-                        if let selected = openFolderPicker() {
-                            rootDirectory = selected
-                            loadDirectoryContents(at: selected, replacingFromLevel: 0)
-                        }
-                    }
-                    .padding(.horizontal)
-
-                    Text("Current: \(rootDirectory.lastPathComponent)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-
-                ScrollViewReader { scrollProxy in
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        HStack(alignment: .top, spacing: 1) {
-                            ForEach(Array(columnStack.enumerated()), id: \.offset) { (level, nodes) in
-                                ScrollView {
-                                    LazyVStack(alignment: .leading, spacing: 4) {
-                                        ForEach(nodes) { node in
-                                            HStack {
-                                                Image(systemName: node.isDirectory ? "folder" : "music.note")
-                                                Text(node.url.lastPathComponent)
-                                                    .lineLimit(1)
-                                            }
-                                            .padding(6)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(Color(NSColor.controlBackgroundColor))
-                                            .contentShape(Rectangle())
-                                            .onTapGesture {
-                                                handleSelection(node, at: level)
-                                            }
-                                        }
-                                    }
-                                    .padding(.horizontal, 4)
-                                }
-                                .frame(width: 200)
-                                .background(Color(NSColor.windowBackgroundColor))
-                                .cornerRadius(4)
-                                .shadow(radius: 1)
-                                .id(level)
-                            }
-                        }
-                        .padding(.vertical)
-                    }
-                    .background(
-                        GeometryReader { _ in
-                            Color.clear
-                                .onChange(of: columnStack.map(\.count)) { _ in
-                                    let newCount = columnStack.count
-                                    if newCount > lastColumnCount {
-                                        withAnimation {
-                                            scrollProxy.scrollTo(newCount - 1, anchor: .trailing)
-                                        }
-                                    }
-                                    lastColumnCount = newCount
-                                }
-                        }
-                    )
-                }
-            }
-
+            folderBrowserView
             Divider()
-
-            VStack(spacing: 8) {
-                if let file = selectedFile {
-                    Text("Now Playing: \(file.lastPathComponent)")
-                        .font(.subheadline)
-                        .padding(.top, 4)
-
-                    WaveformLineView(samples: visualizer.waveformPoints)
-                        .frame(height: 60)
-                        .padding(.horizontal)
-
-                    Button("Stop") {
-                        visualizer.stop()
-                        selectedFile = nil
-                    }
-                    .padding(.bottom, 8)
-                } else {
-                    Text("Select an MP3 file")
-                        .foregroundColor(.gray)
-                        .padding(.top, 6)
-                }
-
-                Spacer()
-            }
-            .frame(minWidth: 300)
+            playerControlsView
         }
-        .frame(height: 300)
+        .frame(height: 360)
         .onAppear {
             loadDirectoryContents(at: rootDirectory, replacingFromLevel: 0)
+
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                guard !isSeeking else { return }
+                currentTime = visualizer.currentTime
+                duration = visualizer.duration
+            }
         }
+    }
+
+    private var folderBrowserView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Button("Choose Root Folder…") {
+                    if let selected = openFolderPicker() {
+                        rootDirectory = selected
+                        loadDirectoryContents(at: selected, replacingFromLevel: 0)
+                    }
+                }
+                .padding(.horizontal)
+
+                Text("Current: \(rootDirectory.lastPathComponent)")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+
+            ScrollViewReader { scrollProxy in
+                ScrollView(.horizontal, showsIndicators: true) {
+                    HStack(alignment: .top, spacing: 1) {
+                        ForEach(Array(columnStack.enumerated()), id: \.offset) { (level, nodes) in
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 4) {
+                                    ForEach(nodes) { node in
+                                        HStack {
+                                            Image(systemName: node.isDirectory ? "folder" : "music.note")
+                                            Text(node.url.lastPathComponent)
+                                                .lineLimit(1)
+                                        }
+                                        .padding(6)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(NSColor.controlBackgroundColor))
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            handleSelection(node, at: level)
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 4)
+                            }
+                            .frame(width: 200)
+                            .background(Color(NSColor.windowBackgroundColor))
+                            .cornerRadius(4)
+                            .shadow(radius: 1)
+                            .id(level)
+                        }
+                    }
+                    .padding(.vertical)
+                }
+                .background(
+                    GeometryReader { _ in
+                        Color.clear
+                            .onChange(of: columnStack.count) { _ in
+                                let newCount = columnStack.count
+                                if newCount > lastColumnCount {
+                                    withAnimation {
+                                        scrollProxy.scrollTo(newCount - 1, anchor: .trailing)
+                                    }
+                                }
+                                lastColumnCount = newCount
+                            }
+                    }
+                )
+            }
+        }
+    }
+
+    private var playerControlsView: some View {
+        VStack(spacing: 8) {
+            if let file = selectedFile {
+                Text("Now Playing: \(file.lastPathComponent)")
+                    .font(.subheadline)
+                    .padding(.top, 4)
+
+                WaveformLineView(samples: visualizer.waveformPoints)
+                    .frame(height: 60)
+                    .padding(.horizontal)
+
+                Slider(
+                    value: Binding(
+                        get: { currentTime },
+                        set: { newValue in
+                            currentTime = newValue
+                        }
+                    ),
+                    in: 0...duration,
+                    onEditingChanged: { editing in
+                        if editing {
+                            isSeeking = true
+                        } else {
+                            visualizer.seek(to: currentTime)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                isSeeking = false
+                            }
+                        }
+                    }
+                )
+
+                .padding(.horizontal)
+
+                HStack(spacing: 16) {
+                    Button(action: {
+                        visualizer.togglePlayback()
+                        isPlaying.toggle()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 32))
+                    }
+
+                    Button(action: {
+                        visualizer.stop()
+                        selectedFile = nil
+                        isPlaying = false
+                    }) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 32))
+                    }
+                }
+                .padding(.bottom, 4)
+
+                Slider(value: Binding(
+                    get: { Double(currentVolume) },
+                    set: {
+                        currentVolume = Float($0)
+                        visualizer.setVolume(currentVolume)
+                    }
+                ), in: 0...1)
+                .padding([.horizontal, .bottom])
+            } else {
+                Text("Select an MP3 file")
+                    .foregroundColor(.gray)
+                    .padding(.top, 6)
+            }
+
+            Spacer()
+        }
+        .frame(minWidth: 300)
     }
 
     func handleSelection(_ node: FileNode, at level: Int) {
@@ -217,6 +354,7 @@ struct ContentView: View {
         } else if node.url.pathExtension.lowercased() == "mp3" {
             selectedFile = node.url
             visualizer.play(url: node.url)
+            isPlaying = true
         }
     }
 
@@ -248,7 +386,6 @@ struct ContentView: View {
         }
     }
 }
-
 
 #Preview {
     ContentView()
