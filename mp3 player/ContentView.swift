@@ -1,234 +1,4 @@
 import SwiftUI
-import AVFoundation
-import Accelerate
-
-// MARK: - Audio Player
-
-class AudioPlayer: ObservableObject {
-    @Published var waveformPoints: [CGFloat] = Array(repeating: 0, count: 60)
-    @Published var isPlaying: Bool = false
-    
-    private var engine = AVAudioEngine()
-    private var player: AVAudioPlayerNode?
-    private let bufferSize = 1024
-    @Published var volume: Float = 0.7
-
-    private var _duration: TimeInterval = 1
-    private var currentURL: URL?
-    private var audioFile: AVAudioFile?
-    private var seekOffset: TimeInterval = 0
-
-    var currentTime: TimeInterval {
-        guard let node = player,
-              let lastRenderTime = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: lastRenderTime) else { return seekOffset }
-        return seekOffset + Double(playerTime.sampleTime) / playerTime.sampleRate
-    }
-    
-    var duration: TimeInterval { _duration }
-
-    func play(url: URL) {
-        stop()
-        currentURL = url
-        seekOffset = 0
-
-        do {
-            let file = try AVAudioFile(forReading: url)
-            self.audioFile = file
-            let format = file.processingFormat
-
-            engine = AVAudioEngine()
-            player = AVAudioPlayerNode()
-            engine.attach(player!)
-            engine.connect(player!, to: engine.mainMixerNode, format: format)
-
-            player!.installTap(onBus: 0, bufferSize: AVAudioFrameCount(bufferSize), format: format) { [weak self] buffer, _ in
-                self?.processBuffer(buffer)
-            }
-
-            try engine.start()
-            _duration = file.duration
-
-            player!.scheduleFile(file, at: nil)
-            player!.volume = volume
-            player!.play()
-            isPlaying = true
-        } catch {
-            print("Playback error: \(error)")
-        }
-    }
-
-    func stop() {
-        player?.stop()
-        engine.stop()
-        waveformPoints = Array(repeating: 0, count: waveformPoints.count)
-        isPlaying = false
-        seekOffset = 0
-        audioFile = nil
-    }
-
-    func togglePlayback() {
-        guard let p = player else { return }
-        if p.isPlaying {
-            p.pause()
-            isPlaying = false
-        } else {
-            p.play()
-            isPlaying = true
-        }
-    }
-
-    func seek(to time: TimeInterval) {
-        guard let file = audioFile, let node = player else { return }
-
-        let sampleRate = file.processingFormat.sampleRate
-        let totalFrames = AVAudioFramePosition(file.length)
-        let clampedTime = max(0, min(time, _duration))
-        let startFrame = AVAudioFramePosition(clampedTime * sampleRate)
-        let remainingFrames = AVAudioFrameCount(totalFrames - startFrame)
-
-        guard remainingFrames > 0 else { return }
-
-        seekOffset = clampedTime
-        let wasPlaying = node.isPlaying
-
-        node.stop()
-        node.scheduleSegment(file, startingFrame: startFrame, frameCount: remainingFrames, at: nil)
-
-        if wasPlaying {
-            node.play()
-        }
-    }
-
-    func setVolume(_ newVolume: Float) {
-        volume = max(0, min(1, newVolume))
-        player?.volume = volume
-    }
-
-    private func processBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData?[0] else { return }
-        let frameLength = Int(buffer.frameLength)
-        var points: [CGFloat] = []
-        let step = max(frameLength / waveformPoints.count, 1)
-
-        for i in stride(from: 0, to: frameLength, by: step) {
-            let chunk = UnsafeBufferPointer(start: channelData + i, count: min(step, frameLength - i))
-            var rms: Float = 0
-            vDSP_rmsqv(chunk.baseAddress!, 1, &rms, vDSP_Length(chunk.count))
-            points.append(CGFloat(rms))
-        }
-
-        DispatchQueue.main.async {
-            self.waveformPoints = points
-        }
-    }
-}
-
-extension AVAudioFile {
-    var duration: TimeInterval {
-        Double(length) / processingFormat.sampleRate
-    }
-}
-
-// MARK: - File Browser
-
-struct FileItem: Identifiable, Equatable {
-    let id = UUID()
-    let url: URL
-    let name: String
-    let isDirectory: Bool
-    
-    static func == (lhs: FileItem, rhs: FileItem) -> Bool {
-        lhs.url == rhs.url
-    }
-}
-
-class FileBrowser: ObservableObject {
-    @Published var currentPath: URL
-    @Published var items: [FileItem] = []
-    @Published var selectedIndex: Int = 0
-    var selectedViaKeyboard: Bool = true
-    
-    init() {
-        if let savedPath = UserDefaults.standard.string(forKey: "rootDirectory"),
-           let url = URL(string: savedPath),
-           FileManager.default.fileExists(atPath: url.path) {
-            currentPath = url
-        } else {
-            currentPath = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!
-        }
-        loadCurrentDirectory()
-    }
-    
-    func loadCurrentDirectory() {
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: currentPath,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
-            
-            items = contents.compactMap { url in
-                var isDir: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return nil }
-                return FileItem(url: url, name: url.lastPathComponent, isDirectory: isDir.boolValue)
-            }
-            .sorted {
-                if $0.isDirectory == $1.isDirectory {
-                    return $0.name.lowercased() < $1.name.lowercased()
-                }
-                return $0.isDirectory && !$1.isDirectory
-            }
-            
-            selectedIndex = 0
-        } catch {
-            print("Failed to read directory: \(error)")
-        }
-    }
-    
-    func moveUp() {
-        selectedViaKeyboard = true
-        selectedIndex = max(0, selectedIndex - 1)
-    }
-
-    func moveDown() {
-        selectedViaKeyboard = true
-        selectedIndex = min(items.count - 1, selectedIndex + 1)
-    }
-
-    func selectByMouse(_ index: Int) {
-        selectedViaKeyboard = false
-        selectedIndex = index
-    }
-    
-    func goIntoSelected() -> FileItem? {
-        guard selectedIndex < items.count else { return nil }
-        let item = items[selectedIndex]
-        
-        if item.isDirectory {
-            currentPath = item.url
-            UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
-            loadCurrentDirectory()
-            return nil
-        }
-        
-        // Return any audio file, not just mp3
-        let audioExtensions = ["mp3", "m4a", "wav", "aiff", "flac"]
-        if audioExtensions.contains(item.url.pathExtension.lowercased()) {
-            return item
-        }
-        
-        return nil
-    }
-    
-    func goUp() {
-        let parent = currentPath.deletingLastPathComponent()
-        guard parent.path != currentPath.path else { return }
-        currentPath = parent
-        UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
-        loadCurrentDirectory()
-    }
-}
 
 // MARK: - Custom Font Extension
 
@@ -238,64 +8,6 @@ extension View {
             .textCase(.uppercase)
     }
 }
-
-// MARK: - Dot Density Meter (Minimal)
-
-struct DotDensityMeter: View {
-    let samples: [CGFloat]
-
-    // Tune these
-    var dotSize: CGFloat = 2.0
-    var minAlpha: CGFloat = 0.12   // dots never fully disappear
-    var maxAlpha: CGFloat = 0.95
-    var boost: CGFloat = 12.0      // boosts RMS into a visible range
-
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let centerY = h / 2
-            let count = max(samples.count, 1)
-            let stepX = w / CGFloat(count)
-
-            // overall energy -> how many dots are "on"
-            let sum = samples.reduce(CGFloat.zero, +)
-            let avg = sum / CGFloat(count)
-            let energy = min(max(avg * boost, 0), 1) // 0...1
-
-            // Convert safely to Int
-            let onCount = Int((Double(energy) * Double(count)).rounded())
-
-            Canvas { context, _ in
-                for i in 0..<count {
-                    let x = stepX * (CGFloat(i) + 0.5)
-
-                    // Left-to-right fill
-                    let isOn = i < onCount
-                    let fade = CGFloat(i) / CGFloat(max(count - 1, 1))
-
-                    let alpha: CGFloat
-                    if isOn {
-                        alpha = minAlpha + (maxAlpha - minAlpha) * (0.75 + 0.25 * (1 - fade))
-                    } else {
-                        alpha = minAlpha
-                    }
-
-                    context.opacity = Double(alpha)
-
-                    let rect = CGRect(
-                        x: x - dotSize / 2,
-                        y: centerY - dotSize / 2,
-                        width: dotSize,
-                        height: dotSize
-                    )
-                    context.fill(Path(ellipseIn: rect), with: .color(.white))
-                }
-            }
-        }
-    }
-}
-
 
 // MARK: - Main View
 
@@ -309,11 +21,12 @@ struct ContentView: View {
     @State private var isScrubbing: Bool = false
     @State private var scrubTime: TimeInterval = 0
     @State private var displayVolume: Float = 0.7
-    
+    @State private var updateTimer: Timer?
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
+
             VStack(spacing: 0) {
                 // Header
                 HStack {
@@ -329,24 +42,21 @@ struct ContentView: View {
                 .padding(8)
                 .background(Color.white.opacity(0.1))
                 .background(WindowDragGesture())
-                
+
                 Divider().background(Color.white)
-                
+
                 // File list
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(browser.items.enumerated()), id: \.element.id) { index, item in
-                                let audioExtensions = ["mp3", "m4a", "wav", "aiff", "flac"]
-                                let isAudio = audioExtensions.contains(item.url.pathExtension.lowercased())
-                                
                                 HStack(spacing: 4) {
                                     Text(index == browser.selectedIndex ? ">" : " ")
                                         .terminalFont(14)
                                         .foregroundColor(.white)
-                                    Text(item.isDirectory ? "[FOLDER]" : (isAudio ? "[AUDIO]" : "[F]"))
+                                    Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
                                         .terminalFont(14)
-                                        .foregroundColor(item.isDirectory ? .white.opacity(0.6) : (isAudio ? .white : .white.opacity(0.3)))
+                                        .foregroundColor(item.isDirectory ? .white.opacity(0.6) : (item.isAudio ? .white : .white.opacity(0.3)))
                                     Text(item.name)
                                         .terminalFont(14)
                                         .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.8))
@@ -385,9 +95,9 @@ struct ContentView: View {
                         }
                     }
                 }
-                
+
                 Divider().background(Color.white)
-                
+
                 // Player controls
                 VStack(spacing: 3) {
                     if !nowPlaying.isEmpty {
@@ -401,7 +111,6 @@ struct ContentView: View {
                             .frame(height: 10)
                             .padding(.horizontal, 8)
 
-                        
                         HStack(spacing: 4) {
                             Text(timeString(isScrubbing ? scrubTime : currentTime))
                                 .terminalFont(11)
@@ -510,12 +219,16 @@ struct ContentView: View {
         .focusable()
         .onAppear {
             displayVolume = player.volume
-            Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            updateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                 if !isScrubbing {
                     currentTime = player.currentTime
                 }
                 duration = player.duration
             }
+        }
+        .onDisappear {
+            updateTimer?.invalidate()
+            updateTimer = nil
         }
         .onKeyPress(.upArrow) {
             browser.moveUp()
@@ -560,65 +273,11 @@ struct ContentView: View {
         .frame(width: 400, height: 300)
         .windowStyle()
     }
-    
+
     func timeString(_ time: TimeInterval) -> String {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%02d:%02d", minutes, seconds)
-    }
-}
-
-// MARK: - Window Drag Blocker
-
-struct WindowDragBlocker: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = DragBlockingView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-class DragBlockingView: NSView {
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    override func mouseDown(with event: NSEvent) {
-        // Don't call super — this prevents the window drag
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        // Don't call super
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        // Don't call super
-    }
-}
-
-// MARK: - Window Styling
-
-struct WindowDragGesture: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            view.window?.isMovableByWindowBackground = true
-        }
-        return view
-    }
-    
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-extension View {
-    func windowStyle() -> some View {
-        self.onAppear {
-            if let window = NSApplication.shared.windows.first {
-                window.titlebarAppearsTransparent = true
-                window.titleVisibility = .hidden
-                window.styleMask.insert(.fullSizeContentView)
-            }
-        }
     }
 }
 
