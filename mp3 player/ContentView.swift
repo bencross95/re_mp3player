@@ -11,15 +11,18 @@ class AudioPlayer: ObservableObject {
     private var engine = AVAudioEngine()
     private var player: AVAudioPlayerNode?
     private let bufferSize = 1024
+    @Published var volume: Float = 0.7
+
     private var _duration: TimeInterval = 1
     private var currentURL: URL?
-    private var currentVolume: Float = 0.7
+    private var audioFile: AVAudioFile?
+    private var seekOffset: TimeInterval = 0
 
     var currentTime: TimeInterval {
-        guard let node = player, node.isPlaying,
+        guard let node = player,
               let lastRenderTime = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: lastRenderTime) else { return 0 }
-        return Double(playerTime.sampleTime) / playerTime.sampleRate
+              let playerTime = node.playerTime(forNodeTime: lastRenderTime) else { return seekOffset }
+        return seekOffset + Double(playerTime.sampleTime) / playerTime.sampleRate
     }
     
     var duration: TimeInterval { _duration }
@@ -27,9 +30,11 @@ class AudioPlayer: ObservableObject {
     func play(url: URL) {
         stop()
         currentURL = url
+        seekOffset = 0
 
         do {
             let file = try AVAudioFile(forReading: url)
+            self.audioFile = file
             let format = file.processingFormat
 
             engine = AVAudioEngine()
@@ -45,7 +50,7 @@ class AudioPlayer: ObservableObject {
             _duration = file.duration
 
             player!.scheduleFile(file, at: nil)
-            player!.volume = currentVolume
+            player!.volume = volume
             player!.play()
             isPlaying = true
         } catch {
@@ -58,6 +63,8 @@ class AudioPlayer: ObservableObject {
         engine.stop()
         waveformPoints = Array(repeating: 0, count: waveformPoints.count)
         isPlaying = false
+        seekOffset = 0
+        audioFile = nil
     }
 
     func togglePlayback() {
@@ -69,6 +76,33 @@ class AudioPlayer: ObservableObject {
             p.play()
             isPlaying = true
         }
+    }
+
+    func seek(to time: TimeInterval) {
+        guard let file = audioFile, let node = player else { return }
+
+        let sampleRate = file.processingFormat.sampleRate
+        let totalFrames = AVAudioFramePosition(file.length)
+        let clampedTime = max(0, min(time, _duration))
+        let startFrame = AVAudioFramePosition(clampedTime * sampleRate)
+        let remainingFrames = AVAudioFrameCount(totalFrames - startFrame)
+
+        guard remainingFrames > 0 else { return }
+
+        seekOffset = clampedTime
+        let wasPlaying = node.isPlaying
+
+        node.stop()
+        node.scheduleSegment(file, startingFrame: startFrame, frameCount: remainingFrames, at: nil)
+
+        if wasPlaying {
+            node.play()
+        }
+    }
+
+    func setVolume(_ newVolume: Float) {
+        volume = max(0, min(1, newVolume))
+        player?.volume = volume
     }
 
     private func processBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -113,6 +147,7 @@ class FileBrowser: ObservableObject {
     @Published var currentPath: URL
     @Published var items: [FileItem] = []
     @Published var selectedIndex: Int = 0
+    var selectedViaKeyboard: Bool = true
     
     init() {
         if let savedPath = UserDefaults.standard.string(forKey: "rootDirectory"),
@@ -152,11 +187,18 @@ class FileBrowser: ObservableObject {
     }
     
     func moveUp() {
+        selectedViaKeyboard = true
         selectedIndex = max(0, selectedIndex - 1)
     }
-    
+
     func moveDown() {
+        selectedViaKeyboard = true
         selectedIndex = min(items.count - 1, selectedIndex + 1)
+    }
+
+    func selectByMouse(_ index: Int) {
+        selectedViaKeyboard = false
+        selectedIndex = index
     }
     
     func goIntoSelected() -> FileItem? {
@@ -197,25 +239,59 @@ extension View {
     }
 }
 
-// MARK: - Terminal Waveform
+// MARK: - Dot Density Meter (Minimal)
 
-struct TerminalWaveform: View {
+struct DotDensityMeter: View {
     let samples: [CGFloat]
-    
+
+    // Tune these
+    var dotSize: CGFloat = 2.0
+    var minAlpha: CGFloat = 0.12   // dots never fully disappear
+    var maxAlpha: CGFloat = 0.95
+    var boost: CGFloat = 12.0      // boosts RMS into a visible range
+
     var body: some View {
         GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
-            let barWidth = width / CGFloat(samples.count)
-            
-            HStack(spacing: 0) {
-                ForEach(samples.indices, id: \.self) { i in
-                    Rectangle()
-                        .fill(Color.white)
-                        .frame(width: barWidth, height: max(2, samples[i] * height * 2))
+            let w = geo.size.width
+            let h = geo.size.height
+            let centerY = h / 2
+            let count = max(samples.count, 1)
+            let stepX = w / CGFloat(count)
+
+            // overall energy -> how many dots are "on"
+            let sum = samples.reduce(CGFloat.zero, +)
+            let avg = sum / CGFloat(count)
+            let energy = min(max(avg * boost, 0), 1) // 0...1
+
+            // Convert safely to Int
+            let onCount = Int((Double(energy) * Double(count)).rounded())
+
+            Canvas { context, _ in
+                for i in 0..<count {
+                    let x = stepX * (CGFloat(i) + 0.5)
+
+                    // Left-to-right fill
+                    let isOn = i < onCount
+                    let fade = CGFloat(i) / CGFloat(max(count - 1, 1))
+
+                    let alpha: CGFloat
+                    if isOn {
+                        alpha = minAlpha + (maxAlpha - minAlpha) * (0.75 + 0.25 * (1 - fade))
+                    } else {
+                        alpha = minAlpha
+                    }
+
+                    context.opacity = Double(alpha)
+
+                    let rect = CGRect(
+                        x: x - dotSize / 2,
+                        y: centerY - dotSize / 2,
+                        width: dotSize,
+                        height: dotSize
+                    )
+                    context.fill(Path(ellipseIn: rect), with: .color(.white))
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
 }
@@ -228,6 +304,10 @@ struct ContentView: View {
     @State private var nowPlaying: String = ""
     @State private var currentTime: TimeInterval = 0
     @State private var duration: TimeInterval = 1
+    @State private var hoveredIndex: Int? = nil
+    @State private var isScrubbing: Bool = false
+    @State private var scrubTime: TimeInterval = 0
+    @State private var displayVolume: Float = 0.7
     
     var body: some View {
         ZStack {
@@ -236,7 +316,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // Header
                 HStack {
-                    Text("♫")
+                    Text("PLAYER")
                         .terminalFont(14)
                         .foregroundColor(.white)
                     Spacer()
@@ -263,7 +343,7 @@ struct ContentView: View {
                                     Text(index == browser.selectedIndex ? ">" : " ")
                                         .terminalFont(14)
                                         .foregroundColor(.white)
-                                    Text(item.isDirectory ? "[D]" : (isAudio ? "[♫]" : "[F]"))
+                                    Text(item.isDirectory ? "[FOLDER]" : (isAudio ? "[AUDIO]" : "[F]"))
                                         .terminalFont(14)
                                         .foregroundColor(item.isDirectory ? .white.opacity(0.6) : (isAudio ? .white : .white.opacity(0.3)))
                                     Text(item.name)
@@ -273,14 +353,34 @@ struct ContentView: View {
                                 .padding(.vertical, 3)
                                 .padding(.horizontal, 8)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(index == browser.selectedIndex ? Color.white.opacity(0.15) : Color.clear)
+                                .background(
+                                    index == browser.selectedIndex
+                                        ? Color.white.opacity(0.15)
+                                        : (hoveredIndex == index ? Color.white.opacity(0.08) : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { isHovered in
+                                    hoveredIndex = isHovered ? index : nil
+                                }
+                                .onTapGesture {
+                                    if index == browser.selectedIndex {
+                                        if let item = browser.goIntoSelected() {
+                                            player.play(url: item.url)
+                                            nowPlaying = item.name
+                                        }
+                                    } else {
+                                        browser.selectByMouse(index)
+                                    }
+                                }
                                 .id(index)
                             }
                         }
                     }
                     .onChange(of: browser.selectedIndex) { newIndex in
-                        withAnimation {
-                            proxy.scrollTo(newIndex, anchor: .center)
+                        if browser.selectedViaKeyboard {
+                            withAnimation {
+                                proxy.scrollTo(newIndex, anchor: .center)
+                            }
                         }
                     }
                 }
@@ -291,28 +391,51 @@ struct ContentView: View {
                 VStack(spacing: 3) {
                     if !nowPlaying.isEmpty {
                         Text(nowPlaying)
-                            .terminalFont(13)
+                            .terminalFont(14)
                             .foregroundColor(.white)
                             .lineLimit(1)
                             .padding(.horizontal, 8)
-                        
-                        TerminalWaveform(samples: player.waveformPoints)
-                            .frame(height: 25)
+
+                        DotDensityMeter(samples: player.waveformPoints)
+                            .frame(height: 10)
                             .padding(.horizontal, 8)
                         
                         HStack(spacing: 4) {
-                            Text(timeString(currentTime))
+                            Text(timeString(isScrubbing ? scrubTime : currentTime))
                                 .terminalFont(11)
-                            Rectangle()
-                                .fill(Color.white.opacity(0.3))
-                                .frame(height: 2)
-                                .overlay(
-                                    GeometryReader { geo in
-                                        Rectangle()
-                                            .fill(Color.white)
-                                            .frame(width: geo.size.width * CGFloat(currentTime / max(duration, 0.1)))
-                                    }
+
+                            GeometryReader { geo in
+                                let progress = (isScrubbing ? scrubTime : currentTime) / max(duration, 0.1)
+
+                                ZStack(alignment: .leading) {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.3))
+                                        .frame(height: 2)
+                                    Rectangle()
+                                        .fill(Color.white)
+                                        .frame(width: geo.size.width * CGFloat(min(1, max(0, progress))), height: 2)
+                                }
+                                .frame(maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                                .highPriorityGesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            isScrubbing = true
+                                            let fraction = max(0, min(1, value.location.x / geo.size.width))
+                                            scrubTime = Double(fraction) * duration
+                                            currentTime = scrubTime
+                                        }
+                                        .onEnded { value in
+                                            let fraction = max(0, min(1, value.location.x / geo.size.width))
+                                            let targetTime = Double(fraction) * duration
+                                            player.seek(to: targetTime)
+                                            isScrubbing = false
+                                        }
                                 )
+                            }
+                            .frame(height: 14)
+                            .background(WindowDragBlocker())
+
                             Text(timeString(duration))
                                 .terminalFont(11)
                         }
@@ -320,33 +443,75 @@ struct ContentView: View {
                         .padding(.horizontal, 8)
                     } else {
                         Text("NO TRACK")
-                            .terminalFont(13)
+                            .terminalFont(14)
                             .foregroundColor(.white.opacity(0.5))
                             .padding(.vertical, 6)
                     }
+
+                    // Volume control
+                    HStack(spacing: 4) {
+                        Text("VOL")
+                            .terminalFont(11)
+
+                        GeometryReader { geo in
+                            let volumeFraction = CGFloat(displayVolume)
+
+                            ZStack(alignment: .leading) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.15))
+                                    .frame(height: 4)
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.7))
+                                    .frame(width: geo.size.width * volumeFraction, height: 4)
+                            }
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        let fraction = Float(max(0, min(1, value.location.x / geo.size.width)))
+                                        displayVolume = fraction
+                                        player.setVolume(fraction)
+                                    }
+                            )
+                        }
+                        .frame(height: 12)
+                        .background(WindowDragBlocker())
+
+                        Text("\(Int(displayVolume * 100))%")
+                            .terminalFont(11)
+                            .frame(width: 35, alignment: .trailing)
+                    }
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.horizontal, 8)
                 }
                 .padding(6)
                 .background(Color.white.opacity(0.05))
-                
+
                 Divider().background(Color.white)
-                
+
                 // Help
                 HStack(spacing: 8) {
-                    Text("↑↓")
+                    Text("↑")
+                    Text("↓")
                     Text("→")
                     Text("←")
                     Text("SPC")
                     Text("ESC")
+                    Text("+/-")
                 }
-                .terminalFont(10)
+                .terminalFont(14)
                 .foregroundColor(.white.opacity(0.4))
                 .padding(4)
             }
         }
         .focusable()
         .onAppear {
+            displayVolume = player.volume
             Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-                currentTime = player.currentTime
+                if !isScrubbing {
+                    currentTime = player.currentTime
+                }
                 duration = player.duration
             }
         }
@@ -378,6 +543,18 @@ struct ContentView: View {
             nowPlaying = ""
             return .handled
         }
+        .onKeyPress(characters: CharacterSet(charactersIn: "=+")) { _ in
+            let newVol = min(1.0, player.volume + 0.05)
+            player.setVolume(newVol)
+            displayVolume = newVol
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "-_")) { _ in
+            let newVol = max(0.0, player.volume - 0.05)
+            player.setVolume(newVol)
+            displayVolume = newVol
+            return .handled
+        }
         .frame(width: 400, height: 300)
         .windowStyle()
     }
@@ -386,6 +563,34 @@ struct ContentView: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Window Drag Blocker
+
+struct WindowDragBlocker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = DragBlockingView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+class DragBlockingView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        // Don't call super — this prevents the window drag
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        // Don't call super
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        // Don't call super
     }
 }
 
