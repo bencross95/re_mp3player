@@ -296,6 +296,7 @@ struct DotDensityMeter: View {
     }
 }
 
+
 // MARK: - Main View
 
 struct ContentView: View {
@@ -399,6 +400,7 @@ struct ContentView: View {
                         DotDensityMeter(samples: player.waveformPoints)
                             .frame(height: 10)
                             .padding(.horizontal, 8)
+
                         
                         HStack(spacing: 4) {
                             Text(timeString(isScrubbing ? scrubTime : currentTime))
