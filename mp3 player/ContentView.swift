@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Custom Font Extension
 
@@ -57,9 +58,16 @@ struct ContentView: View {
                                     Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
                                         .terminalFont(14)
                                         .foregroundColor(item.isDirectory ? .white.opacity(0.6) : (item.isAudio ? .white : .white.opacity(0.3)))
-                                    Text(item.name)
+                                    Text(item.displayName)
                                         .terminalFont(14)
                                         .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.8))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if item.isAudio, let dur = item.duration {
+                                        Text(durationString(dur))
+                                            .terminalFont(11)
+                                            .foregroundColor(.white.opacity(0.5))
+                                    }
                                 }
                                 .padding(.vertical, 3)
                                 .padding(.horizontal, 8)
@@ -77,10 +85,26 @@ struct ContentView: View {
                                     if index == browser.selectedIndex {
                                         if let item = browser.goIntoSelected() {
                                             player.play(url: item.url)
-                                            nowPlaying = item.name
+                                            nowPlaying = item.displayName
                                         }
                                     } else {
                                         browser.selectByMouse(index)
+                                    }
+                                }
+                                .contextMenu {
+                                    Button("Show in Finder") {
+                                        NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                                    }
+                                    if item.isAudio {
+                                        Button("Play") {
+                                            browser.selectByMouse(index)
+                                            player.play(url: item.url)
+                                            nowPlaying = item.displayName
+                                        }
+                                    }
+                                    Button("Copy Path") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(item.url.path, forType: .string)
                                     }
                                 }
                                 .id(index)
@@ -241,7 +265,7 @@ struct ContentView: View {
         .onKeyPress(.rightArrow) {
             if let item = browser.goIntoSelected() {
                 player.play(url: item.url)
-                nowPlaying = item.name
+                nowPlaying = item.displayName
             }
             return .handled
         }
@@ -278,6 +302,12 @@ struct ContentView: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    func durationString(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
