@@ -45,6 +45,7 @@ struct WindowStyler: NSViewRepresentable {
                 window.titlebarAppearsTransparent = true
                 window.titleVisibility = .hidden
                 window.styleMask.insert(.fullSizeContentView)
+                window.styleMask.remove(.resizable)
             }
         }
         return view

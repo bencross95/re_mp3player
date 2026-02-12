@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var scrubTime: TimeInterval = 0
     @State private var displayVolume: Float = 0.7
     @State private var updateTimer: Timer?
+    @State private var dragStartVolume: Float = 0.7
 
     var body: some View {
         ZStack {
@@ -114,10 +115,6 @@ struct ContentView: View {
                             .lineLimit(1)
                             .padding(.horizontal, 8)
 
-                        DotDensityMeter(samples: player.waveformPoints)
-                            .frame(height: 10)
-                            .padding(.horizontal, 8)
-
                         HStack(spacing: 4) {
                             Text(timeString(isScrubbing ? scrubTime : currentTime))
                                 .terminalFont(14)
@@ -156,6 +153,31 @@ struct ContentView: View {
 
                             Text(timeString(duration))
                                 .terminalFont(14)
+
+                            // Volume dial
+                            ZStack {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 2)
+                                Circle()
+                                    .trim(from: 0, to: CGFloat(displayVolume))
+                                    .stroke(Color.white.opacity(0.5), lineWidth: 2)
+                                    .rotationEffect(.degrees(-90))
+                            }
+                            .frame(width: 14, height: 14)
+                            .contentShape(Circle())
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        if abs(value.translation.height) < 1 && abs(value.translation.width) < 1 {
+                                            dragStartVolume = displayVolume
+                                        }
+                                        let delta = Float(-value.translation.height / 100)
+                                        let newVol = max(0, min(1, dragStartVolume + delta))
+                                        displayVolume = newVol
+                                        player.setVolume(newVol)
+                                    }
+                            )
+                            .background(WindowDragBlocker())
                         }
                         .foregroundColor(.white.opacity(0.5))
                         .padding(.horizontal, 8)
@@ -165,62 +187,9 @@ struct ContentView: View {
                             .foregroundColor(.white.opacity(0.2))
                             .padding(.vertical, 6)
                     }
-
-                    // Volume control
-                    HStack(spacing: 4) {
-                        Text("VOL")
-                            .terminalFont(14)
-
-                        GeometryReader { geo in
-                            let volumeFraction = CGFloat(displayVolume)
-
-                            ZStack(alignment: .leading) {
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.2))
-                                    .frame(height: 4)
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.5))
-                                    .frame(width: geo.size.width * volumeFraction, height: 4)
-                            }
-                            .frame(maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                            .highPriorityGesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { value in
-                                        let fraction = Float(max(0, min(1, value.location.x / geo.size.width)))
-                                        displayVolume = fraction
-                                        player.setVolume(fraction)
-                                    }
-                            )
-                        }
-                        .frame(height: 12)
-                        .background(WindowDragBlocker())
-
-                        Text("\(Int(displayVolume * 100))%")
-                            .terminalFont(14)
-                            .frame(width: 45, alignment: .trailing)
-                    }
-                    .foregroundColor(.white.opacity(0.2))
-                    .padding(.horizontal, 8)
                 }
                 .padding(6)
                 .background(Color.white.opacity(0.1))
-
-                Divider().background(Color.white.opacity(0.2))
-
-                // Help
-                HStack(spacing: 8) {
-                    Text("↑")
-                    Text("↓")
-                    Text("→")
-                    Text("←")
-                    Text("SPC")
-                    Text("ESC")
-                    Text("+/-")
-                }
-                .terminalFont(14)
-                .foregroundColor(.white.opacity(0.2))
-                .padding(4)
             }
         }
         .background(WindowDragGesture())
@@ -278,7 +247,7 @@ struct ContentView: View {
             displayVolume = newVol
             return .handled
         }
-        .frame(width: 400, height: 150)
+        .frame(width: 280, height: 150)
         .windowStyle()
     }
 
