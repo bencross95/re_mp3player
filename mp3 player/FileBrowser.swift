@@ -143,6 +143,28 @@ class FileBrowser: ObservableObject {
         selectedIndex = index
     }
 
+    func nextAudioItem() -> FileItem? {
+        for i in (selectedIndex + 1)..<items.count {
+            if items[i].isAudio {
+                selectedViaKeyboard = true
+                selectedIndex = i
+                return items[i]
+            }
+        }
+        return nil
+    }
+
+    func previousAudioItem() -> FileItem? {
+        for i in stride(from: selectedIndex - 1, through: 0, by: -1) {
+            if items[i].isAudio {
+                selectedViaKeyboard = true
+                selectedIndex = i
+                return items[i]
+            }
+        }
+        return nil
+    }
+
     func goIntoSelected() -> FileItem? {
         guard selectedIndex < items.count else { return nil }
         let item = items[selectedIndex]

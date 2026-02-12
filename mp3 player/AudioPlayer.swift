@@ -1,6 +1,7 @@
 import AVFoundation
 import Accelerate
 import SwiftUI
+import MediaPlayer
 
 class AudioPlayer: ObservableObject {
     @Published var waveformPoints: [CGFloat] = Array(repeating: 0, count: 60)
@@ -13,6 +14,10 @@ class AudioPlayer: ObservableObject {
     private var _duration: TimeInterval = 1
     private var audioFile: AVAudioFile?
     private var seekOffset: TimeInterval = 0
+    private var currentTrackName: String = ""
+
+    var onNextTrack: (() -> Void)?
+    var onPreviousTrack: (() -> Void)?
 
     var currentTime: TimeInterval {
         guard let node = playerNode,
@@ -23,9 +28,49 @@ class AudioPlayer: ObservableObject {
 
     var duration: TimeInterval { _duration }
 
+    func setupRemoteCommands() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            self?.togglePlayback()
+            return .success
+        }
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            self?.togglePlayback()
+            return .success
+        }
+        commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.togglePlayback()
+            return .success
+        }
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+            self?.onNextTrack?()
+            return .success
+        }
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            self?.onPreviousTrack?()
+            return .success
+        }
+        commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            self?.seek(to: event.positionTime)
+            return .success
+        }
+    }
+
+    private func updateNowPlayingInfo() {
+        var info = [String: Any]()
+        info[MPMediaItemPropertyTitle] = currentTrackName
+        info[MPMediaItemPropertyPlaybackDuration] = _duration
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
     func play(url: URL) {
         stop()
         seekOffset = 0
+        currentTrackName = url.deletingPathExtension().lastPathComponent
 
         do {
             let file = try AVAudioFile(forReading: url)
@@ -49,6 +94,7 @@ class AudioPlayer: ObservableObject {
             node.volume = volume
             node.play()
             isPlaying = true
+            updateNowPlayingInfo()
         } catch {
             print("Playback error: \(error)")
         }
@@ -61,6 +107,7 @@ class AudioPlayer: ObservableObject {
         isPlaying = false
         seekOffset = 0
         audioFile = nil
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     func togglePlayback() {
@@ -72,6 +119,7 @@ class AudioPlayer: ObservableObject {
             node.play()
             isPlaying = true
         }
+        updateNowPlayingInfo()
     }
 
     func seek(to time: TimeInterval) {
@@ -94,6 +142,7 @@ class AudioPlayer: ObservableObject {
         if wasPlaying {
             node.play()
         }
+        updateNowPlayingInfo()
     }
 
     func setVolume(_ newVolume: Float) {

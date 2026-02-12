@@ -258,6 +258,19 @@ struct ContentView: View {
         .focusable()
         .onAppear {
             displayVolume = player.volume
+            player.setupRemoteCommands()
+            player.onNextTrack = {
+                if let item = browser.nextAudioItem() {
+                    player.play(url: item.url)
+                    nowPlaying = item.displayName
+                }
+            }
+            player.onPreviousTrack = {
+                if let item = browser.previousAudioItem() {
+                    player.play(url: item.url)
+                    nowPlaying = item.displayName
+                }
+            }
             updateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                 if !isScrubbing {
                     currentTime = player.currentTime
