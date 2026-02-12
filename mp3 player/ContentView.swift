@@ -123,6 +123,7 @@ struct ContentView: View {
                             })
                         }
                         .scrollIndicators(.hidden)
+                        .background(ScrollBarHider())
                         .coordinateSpace(name: "scroll")
                         .onPreferenceChange(ScrollOffsetPreferenceKey.self) { metrics in
                             scrollMetrics = metrics
