@@ -10,6 +10,84 @@ extension View {
     }
 }
 
+// MARK: - File Row View
+
+struct FileRowView: View {
+    let item: FileItem
+    let index: Int
+    let isSelected: Bool
+    let onTap: () -> Void
+    let onDoubleTap: () -> FileItem?
+    var onPlay: ((FileItem) -> Void)?
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(isSelected ? ">" : " ")
+                .terminalFont(14)
+                .foregroundColor(.white)
+            Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
+                .terminalFont(14)
+                .foregroundColor(item.isDirectory ? .white.opacity(0.5) : (item.isAudio ? .white : .white.opacity(0.2)))
+            Text(item.displayName)
+                .terminalFont(14)
+                .foregroundColor(isSelected ? .white : .white.opacity(0.5))
+                .lineLimit(1)
+            Spacer()
+            if item.isAudio, let dur = item.duration {
+                Text(FileRowView.durationString(dur))
+                    .terminalFont(14)
+                    .foregroundColor(.white.opacity(0.2))
+            }
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            isSelected
+                ? Color.white.opacity(0.2)
+                : (isHovered ? Color.white.opacity(0.1) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .onTapGesture {
+            if isSelected {
+                if let playItem = onDoubleTap() {
+                    onPlay?(playItem)
+                }
+            } else {
+                onTap()
+            }
+        }
+        .contextMenu {
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            }
+            if item.isAudio {
+                Button("Play") {
+                    onTap()
+                    if let playItem = onDoubleTap() {
+                        onPlay?(playItem)
+                    }
+                }
+            }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.url.path, forType: .string)
+            }
+        }
+    }
+
+    static func durationString(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
 // MARK: - Main View
 
 struct ContentView: View {
@@ -18,7 +96,6 @@ struct ContentView: View {
     @State private var nowPlaying: String = ""
     @State private var currentTime: TimeInterval = 0
     @State private var duration: TimeInterval = 1
-    @State private var hoveredIndex: Int? = nil
     @State private var isScrubbing: Bool = false
     @State private var scrubTime: TimeInterval = 0
     @State private var displayVolume: Float = 0.7
@@ -67,70 +144,25 @@ struct ContentView: View {
 
                 // File list
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(browser.items.enumerated()), id: \.element.id) { index, item in
-                                HStack(spacing: 4) {
-                                    Text(index == browser.selectedIndex ? ">" : " ")
-                                        .terminalFont(14)
-                                        .foregroundColor(.white)
-                                    Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
-                                        .terminalFont(14)
-                                        .foregroundColor(item.isDirectory ? .white.opacity(0.5) : (item.isAudio ? .white : .white.opacity(0.2)))
-                                    Text(item.displayName)
-                                        .terminalFont(14)
-                                        .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.5))
-                                        .lineLimit(1)
-                                    Spacer()
-                                    if item.isAudio, let dur = item.duration {
-                                        Text(durationString(dur))
-                                            .terminalFont(14)
-                                            .foregroundColor(.white.opacity(0.2))
-                                    }
-                                }
-                                .padding(.vertical, 3)
-                                .padding(.horizontal, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    index == browser.selectedIndex
-                                        ? Color.white.opacity(0.2)
-                                        : (hoveredIndex == index ? Color.white.opacity(0.1) : Color.clear)
-                                )
-                                .contentShape(Rectangle())
-                                .onHover { isHovered in
-                                    hoveredIndex = isHovered ? index : nil
-                                }
-                                .onTapGesture {
-                                    if index == browser.selectedIndex {
-                                        if let item = browser.goIntoSelected() {
-                                            player.play(url: item.url)
-                                            nowPlaying = item.displayName
-                                        }
-                                    } else {
-                                        browser.selectByMouse(index)
-                                    }
-                                }
-                                .contextMenu {
-                                    Button("Show in Finder") {
-                                        NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                                    }
-                                    if item.isAudio {
-                                        Button("Play") {
-                                            browser.selectByMouse(index)
-                                            player.play(url: item.url)
-                                            nowPlaying = item.displayName
-                                        }
-                                    }
-                                    Button("Copy Path") {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(item.url.path, forType: .string)
-                                    }
-                                }
-                                .id(index)
+                    List(Array(browser.items.enumerated()), id: \.element.id) { index, item in
+                        FileRowView(
+                            item: item,
+                            index: index,
+                            isSelected: index == browser.selectedIndex,
+                            onTap: { browser.selectByMouse(index) },
+                            onDoubleTap: { browser.goIntoSelected() },
+                            onPlay: { playItem in
+                                player.play(url: playItem.url)
+                                nowPlaying = playItem.displayName
                             }
-                        }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(index)
                     }
-                    .scrollIndicators(.automatic)
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                     .onChange(of: browser.selectedIndex) { newIndex in
                         if browser.selectedViaKeyboard {
                             withAnimation {
@@ -295,11 +327,6 @@ struct ContentView: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    func durationString(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
 }
 
 #Preview {
