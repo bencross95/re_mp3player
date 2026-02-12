@@ -109,12 +109,6 @@ struct ContentView: View {
                 // Player controls
                 VStack(spacing: 3) {
                     if !nowPlaying.isEmpty {
-                        Text(nowPlaying)
-                            .terminalFont(14)
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .padding(.horizontal, 8)
-
                         HStack(spacing: 4) {
                             Text(timeString(isScrubbing ? scrubTime : currentTime))
                                 .terminalFont(14)
