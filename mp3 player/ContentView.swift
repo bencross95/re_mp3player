@@ -40,16 +40,16 @@ struct ContentView: View {
                                         .foregroundColor(.white)
                                     Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
                                         .terminalFont(14)
-                                        .foregroundColor(item.isDirectory ? .white.opacity(0.6) : (item.isAudio ? .white : .white.opacity(0.3)))
+                                        .foregroundColor(item.isDirectory ? .white.opacity(0.5) : (item.isAudio ? .white : .white.opacity(0.2)))
                                     Text(item.displayName)
                                         .terminalFont(14)
-                                        .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.8))
+                                        .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.5))
                                         .lineLimit(1)
                                     Spacer()
                                     if item.isAudio, let dur = item.duration {
                                         Text(durationString(dur))
                                             .terminalFont(14)
-                                            .foregroundColor(.white.opacity(0.5))
+                                            .foregroundColor(.white.opacity(0.2))
                                     }
                                 }
                                 .padding(.vertical, 3)
@@ -57,8 +57,8 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
                                     index == browser.selectedIndex
-                                        ? Color.white.opacity(0.15)
-                                        : (hoveredIndex == index ? Color.white.opacity(0.08) : Color.clear)
+                                        ? Color.white.opacity(0.2)
+                                        : (hoveredIndex == index ? Color.white.opacity(0.1) : Color.clear)
                                 )
                                 .contentShape(Rectangle())
                                 .onHover { isHovered in
@@ -103,7 +103,7 @@ struct ContentView: View {
                     }
                 }
 
-                Divider().background(Color.white)
+                Divider().background(Color.white.opacity(0.2))
 
                 // Player controls
                 VStack(spacing: 3) {
@@ -127,7 +127,7 @@ struct ContentView: View {
 
                                 ZStack(alignment: .leading) {
                                     Rectangle()
-                                        .fill(Color.white.opacity(0.3))
+                                        .fill(Color.white.opacity(0.2))
                                         .frame(height: 2)
                                     Rectangle()
                                         .fill(Color.white)
@@ -157,12 +157,12 @@ struct ContentView: View {
                             Text(timeString(duration))
                                 .terminalFont(14)
                         }
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.white.opacity(0.5))
                         .padding(.horizontal, 8)
                     } else {
                         Text("NO TRACK")
                             .terminalFont(14)
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(.white.opacity(0.2))
                             .padding(.vertical, 6)
                     }
 
@@ -176,10 +176,10 @@ struct ContentView: View {
 
                             ZStack(alignment: .leading) {
                                 Rectangle()
-                                    .fill(Color.white.opacity(0.15))
+                                    .fill(Color.white.opacity(0.2))
                                     .frame(height: 4)
                                 Rectangle()
-                                    .fill(Color.white.opacity(0.7))
+                                    .fill(Color.white.opacity(0.5))
                                     .frame(width: geo.size.width * volumeFraction, height: 4)
                             }
                             .frame(maxHeight: .infinity)
@@ -200,13 +200,13 @@ struct ContentView: View {
                             .terminalFont(14)
                             .frame(width: 45, alignment: .trailing)
                     }
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.2))
                     .padding(.horizontal, 8)
                 }
                 .padding(6)
-                .background(Color.white.opacity(0.05))
+                .background(Color.white.opacity(0.1))
 
-                Divider().background(Color.white)
+                Divider().background(Color.white.opacity(0.2))
 
                 // Help
                 HStack(spacing: 8) {
@@ -219,7 +219,7 @@ struct ContentView: View {
                     Text("+/-")
                 }
                 .terminalFont(14)
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(.white.opacity(0.2))
                 .padding(4)
             }
         }
@@ -278,7 +278,7 @@ struct ContentView: View {
             displayVolume = newVol
             return .handled
         }
-        .frame(width: 400, height: 300)
+        .frame(width: 400, height: 150)
         .windowStyle()
     }
 
