@@ -10,6 +10,21 @@ extension View {
     }
 }
 
+// MARK: - Scroll Tracking
+
+struct ScrollMetrics: Equatable {
+    var offset: CGFloat = 0
+    var contentHeight: CGFloat = 0
+    var viewHeight: CGFloat = 0
+}
+
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue = ScrollMetrics()
+    static func reduce(value: inout ScrollMetrics, nextValue: () -> ScrollMetrics) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Main View
 
 struct ContentView: View {
@@ -24,6 +39,7 @@ struct ContentView: View {
     @State private var displayVolume: Float = 0.7
     @State private var updateTimer: Timer?
     @State private var dragStartVolume: Float = 0.7
+    @State private var scrollMetrics = ScrollMetrics()
 
     var body: some View {
         ZStack {
@@ -32,66 +48,99 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // File list
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(browser.items.enumerated()), id: \.element.id) { index, item in
-                                HStack(spacing: 4) {
-                                    Text(index == browser.selectedIndex ? ">" : " ")
-                                        .terminalFont(14)
-                                        .foregroundColor(.white)
-                                    Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
-                                        .terminalFont(14)
-                                        .foregroundColor(item.isDirectory ? .white.opacity(0.5) : (item.isAudio ? .white : .white.opacity(0.2)))
-                                    Text(item.displayName)
-                                        .terminalFont(14)
-                                        .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.5))
-                                        .lineLimit(1)
-                                    Spacer()
-                                    if item.isAudio, let dur = item.duration {
-                                        Text(durationString(dur))
+                    GeometryReader { outerGeo in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(browser.items.enumerated()), id: \.element.id) { index, item in
+                                    HStack(spacing: 4) {
+                                        Text(index == browser.selectedIndex ? ">" : " ")
                                             .terminalFont(14)
-                                            .foregroundColor(.white.opacity(0.2))
-                                    }
-                                }
-                                .padding(.vertical, 3)
-                                .padding(.horizontal, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    index == browser.selectedIndex
-                                        ? Color.white.opacity(0.2)
-                                        : (hoveredIndex == index ? Color.white.opacity(0.1) : Color.clear)
-                                )
-                                .contentShape(Rectangle())
-                                .onHover { isHovered in
-                                    hoveredIndex = isHovered ? index : nil
-                                }
-                                .onTapGesture {
-                                    if index == browser.selectedIndex {
-                                        if let item = browser.goIntoSelected() {
-                                            player.play(url: item.url)
-                                            nowPlaying = item.displayName
+                                            .foregroundColor(.white)
+                                        Text(item.isDirectory ? "[FOLDER]" : (item.isAudio ? "[AUDIO]" : "[F]"))
+                                            .terminalFont(14)
+                                            .foregroundColor(item.isDirectory ? .white.opacity(0.5) : (item.isAudio ? .white : .white.opacity(0.2)))
+                                        Text(item.displayName)
+                                            .terminalFont(14)
+                                            .foregroundColor(index == browser.selectedIndex ? .white : .white.opacity(0.5))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        if item.isAudio, let dur = item.duration {
+                                            Text(durationString(dur))
+                                                .terminalFont(14)
+                                                .foregroundColor(.white.opacity(0.2))
                                         }
-                                    } else {
-                                        browser.selectByMouse(index)
                                     }
-                                }
-                                .contextMenu {
-                                    Button("Show in Finder") {
-                                        NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        index == browser.selectedIndex
+                                            ? Color.white.opacity(0.2)
+                                            : (hoveredIndex == index ? Color.white.opacity(0.1) : Color.clear)
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onHover { isHovered in
+                                        hoveredIndex = isHovered ? index : nil
                                     }
-                                    if item.isAudio {
-                                        Button("Play") {
+                                    .onTapGesture {
+                                        if index == browser.selectedIndex {
+                                            if let item = browser.goIntoSelected() {
+                                                player.play(url: item.url)
+                                                nowPlaying = item.displayName
+                                            }
+                                        } else {
                                             browser.selectByMouse(index)
-                                            player.play(url: item.url)
-                                            nowPlaying = item.displayName
                                         }
                                     }
-                                    Button("Copy Path") {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(item.url.path, forType: .string)
+                                    .contextMenu {
+                                        Button("Show in Finder") {
+                                            NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                                        }
+                                        if item.isAudio {
+                                            Button("Play") {
+                                                browser.selectByMouse(index)
+                                                player.play(url: item.url)
+                                                nowPlaying = item.displayName
+                                            }
+                                        }
+                                        Button("Copy Path") {
+                                            NSPasteboard.general.clearContents()
+                                            NSPasteboard.general.setString(item.url.path, forType: .string)
+                                        }
                                     }
+                                    .id(index)
                                 }
-                                .id(index)
+                            }
+                            .background(GeometryReader { contentGeo in
+                                Color.clear.preference(
+                                    key: ScrollOffsetPreferenceKey.self,
+                                    value: ScrollMetrics(
+                                        offset: -contentGeo.frame(in: .named("scroll")).origin.y,
+                                        contentHeight: contentGeo.size.height,
+                                        viewHeight: outerGeo.size.height
+                                    )
+                                )
+                            })
+                        }
+                        .scrollIndicators(.hidden)
+                        .coordinateSpace(name: "scroll")
+                        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { metrics in
+                            scrollMetrics = metrics
+                        }
+                        .overlay(alignment: .trailing) {
+                            if scrollMetrics.contentHeight > scrollMetrics.viewHeight {
+                                let viewHeight = outerGeo.size.height
+                                let ratio = viewHeight / scrollMetrics.contentHeight
+                                let thumbHeight = max(20, viewHeight * ratio)
+                                let maxOffset = scrollMetrics.contentHeight - scrollMetrics.viewHeight
+                                let scrollFraction = maxOffset > 0 ? scrollMetrics.offset / maxOffset : 0
+                                let trackRange = viewHeight - thumbHeight
+                                let thumbOffset = trackRange * min(1, max(0, scrollFraction))
+
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(Color.white.opacity(0.2))
+                                    .frame(width: 2, height: thumbHeight)
+                                    .offset(y: thumbOffset - (viewHeight - thumbHeight) / 2)
                             }
                         }
                     }
