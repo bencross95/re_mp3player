@@ -29,23 +29,6 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Text("PLAYER")
-                        .terminalFont(14)
-                        .foregroundColor(.white)
-                    Spacer()
-                    Text(browser.currentPath.lastPathComponent)
-                        .terminalFont(14)
-                        .foregroundColor(.white.opacity(0.6))
-                        .lineLimit(1)
-                }
-                .padding(8)
-                .background(Color.white.opacity(0.1))
-                .background(WindowDragGesture())
-
-                Divider().background(Color.white)
-
                 // File list
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -65,7 +48,7 @@ struct ContentView: View {
                                     Spacer()
                                     if item.isAudio, let dur = item.duration {
                                         Text(durationString(dur))
-                                            .terminalFont(11)
+                                            .terminalFont(14)
                                             .foregroundColor(.white.opacity(0.5))
                                     }
                                 }
@@ -137,7 +120,7 @@ struct ContentView: View {
 
                         HStack(spacing: 4) {
                             Text(timeString(isScrubbing ? scrubTime : currentTime))
-                                .terminalFont(11)
+                                .terminalFont(14)
 
                             GeometryReader { geo in
                                 let progress = (isScrubbing ? scrubTime : currentTime) / max(duration, 0.1)
@@ -172,7 +155,7 @@ struct ContentView: View {
                             .background(WindowDragBlocker())
 
                             Text(timeString(duration))
-                                .terminalFont(11)
+                                .terminalFont(14)
                         }
                         .foregroundColor(.white.opacity(0.7))
                         .padding(.horizontal, 8)
@@ -186,7 +169,7 @@ struct ContentView: View {
                     // Volume control
                     HStack(spacing: 4) {
                         Text("VOL")
-                            .terminalFont(11)
+                            .terminalFont(14)
 
                         GeometryReader { geo in
                             let volumeFraction = CGFloat(displayVolume)
@@ -214,8 +197,8 @@ struct ContentView: View {
                         .background(WindowDragBlocker())
 
                         Text("\(Int(displayVolume * 100))%")
-                            .terminalFont(11)
-                            .frame(width: 35, alignment: .trailing)
+                            .terminalFont(14)
+                            .frame(width: 45, alignment: .trailing)
                     }
                     .foregroundColor(.white.opacity(0.5))
                     .padding(.horizontal, 8)
@@ -240,6 +223,7 @@ struct ContentView: View {
                 .padding(4)
             }
         }
+        .background(WindowDragGesture())
         .focusable()
         .onAppear {
             displayVolume = player.volume
