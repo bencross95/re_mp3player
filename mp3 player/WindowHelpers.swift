@@ -37,75 +37,40 @@ class DragBlockingView: NSView {
 
 // MARK: - Window Styling
 
-struct WindowStyler: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if let window = view.window {
-                window.titlebarAppearsTransparent = true
-                window.titleVisibility = .hidden
-                window.styleMask.insert(.fullSizeContentView)
-                window.styleMask.remove(.resizable)
-            }
+class WindowStylerView: NSView {
+    private var windowObservation: NSKeyValueObservation?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyStyle()
+
+        // Also observe in case the window changes
+        windowObservation = observe(\.window, options: [.new]) { [weak self] _, _ in
+            self?.applyStyle()
         }
-        return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    private func applyStyle() {
+        guard let window = self.window else { return }
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.styleMask.insert(.fullSizeContentView)
+        window.styleMask.insert(.resizable)
+        window.isOpaque = false
+        window.backgroundColor = NSColor.black.withAlphaComponent(0.88)
+    }
+}
+
+struct WindowStyler: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowStylerView {
+        WindowStylerView()
+    }
+
+    func updateNSView(_ nsView: WindowStylerView, context: Context) {}
 }
 
 extension View {
     func windowStyle() -> some View {
         self.background(WindowStyler())
-    }
-}
-
-// MARK: - Hide Native Scroll Indicators
-
-struct ScrollBarHider: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            hideScrollers(in: view)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            hideScrollers(in: nsView)
-        }
-    }
-
-    private func hideScrollers(in view: NSView) {
-        if let scrollView = findScrollView(in: view) {
-            scrollView.hasVerticalScroller = false
-            scrollView.hasHorizontalScroller = false
-            scrollView.verticalScroller = nil
-            scrollView.horizontalScroller = nil
-        }
-    }
-
-    private func findScrollView(in view: NSView) -> NSScrollView? {
-        if let scrollView = view as? NSScrollView {
-            return scrollView
-        }
-        for subview in view.superview?.subviews ?? [] {
-            if let found = findEnclosingScrollView(view: subview) {
-                return found
-            }
-        }
-        return findEnclosingScrollView(view: view)
-    }
-
-    private func findEnclosingScrollView(view: NSView) -> NSScrollView? {
-        var current: NSView? = view
-        while let v = current {
-            if let sv = v as? NSScrollView {
-                return sv
-            }
-            current = v.superview
-        }
-        return nil
     }
 }

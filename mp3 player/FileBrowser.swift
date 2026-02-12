@@ -32,8 +32,12 @@ class FileBrowser: ObservableObject {
     @Published var currentPath: URL
     @Published var items: [FileItem] = []
     @Published var selectedIndex: Int = 0
+    @Published var canGoBack: Bool = false
+    @Published var canGoForward: Bool = false
     var selectedViaKeyboard: Bool = true
     private var metadataCache: [URL: (duration: TimeInterval?, artist: String?, title: String?)] = [:]
+    private var backStack: [URL] = []
+    private var forwardStack: [URL] = []
 
     init() {
         if let savedPath = UserDefaults.standard.string(forKey: "rootDirectory"),
@@ -144,9 +148,7 @@ class FileBrowser: ObservableObject {
         let item = items[selectedIndex]
 
         if item.isDirectory {
-            currentPath = item.url
-            UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
-            loadCurrentDirectory()
+            navigateTo(item.url)
             return nil
         }
 
@@ -160,8 +162,38 @@ class FileBrowser: ObservableObject {
     func goUp() {
         let parent = currentPath.deletingLastPathComponent()
         guard parent.path != currentPath.path else { return }
-        currentPath = parent
+        navigateTo(parent)
+    }
+
+    private func navigateTo(_ url: URL) {
+        backStack.append(currentPath)
+        forwardStack.removeAll()
+        currentPath = url
         UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
         loadCurrentDirectory()
+        updateNavigationState()
+    }
+
+    func goBack() {
+        guard let previous = backStack.popLast() else { return }
+        forwardStack.append(currentPath)
+        currentPath = previous
+        UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
+        loadCurrentDirectory()
+        updateNavigationState()
+    }
+
+    func goForward() {
+        guard let next = forwardStack.popLast() else { return }
+        backStack.append(currentPath)
+        currentPath = next
+        UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
+        loadCurrentDirectory()
+        updateNavigationState()
+    }
+
+    private func updateNavigationState() {
+        canGoBack = !backStack.isEmpty
+        canGoForward = !forwardStack.isEmpty
     }
 }
