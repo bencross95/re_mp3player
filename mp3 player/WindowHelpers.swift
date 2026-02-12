@@ -57,7 +57,7 @@ class WindowStylerView: NSView {
         window.styleMask.insert(.fullSizeContentView)
         window.styleMask.insert(.resizable)
         window.isOpaque = false
-        window.backgroundColor = NSColor.black.withAlphaComponent(0.88)
+        window.backgroundColor = NSColor.black.withAlphaComponent(0.9)
     }
 }
 
