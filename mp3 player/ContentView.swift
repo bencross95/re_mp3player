@@ -88,100 +88,115 @@ struct FileRowView: View {
     }
 }
 
-// MARK: - Player Controls View
+// MARK: - Footer Player Bar
 
-struct PlayerControlsView: View {
+struct FooterPlayerBar: View {
     @ObservedObject var player: AudioPlayer
     let nowPlaying: String
+    var onPrevious: () -> Void
+    var onNext: () -> Void
 
     @State private var currentTime: TimeInterval = 0
     @State private var duration: TimeInterval = 1
     @State private var isScrubbing: Bool = false
     @State private var scrubTime: TimeInterval = 0
-    @State private var displayVolume: Float = 0.7
-    @State private var dragStartVolume: Float = 0.7
     @State private var updateTimer: Timer?
 
     var body: some View {
-        VStack(spacing: 3) {
-            if !nowPlaying.isEmpty {
-                HStack(spacing: 4) {
-                    Text(timeString(isScrubbing ? scrubTime : currentTime))
-                        .terminalFont(14)
+        VStack(spacing: 0) {
+            // Scrubber bar across full width
+            GeometryReader { geo in
+                let progress = (isScrubbing ? scrubTime : currentTime) / max(duration, 0.1)
 
-                    GeometryReader { geo in
-                        let progress = (isScrubbing ? scrubTime : currentTime) / max(duration, 0.1)
-
-                        ZStack(alignment: .leading) {
-                            Rectangle()
-                                .fill(Color.white.opacity(0.2))
-                                .frame(height: 2)
-                            Rectangle()
-                                .fill(Color.white)
-                                .frame(width: geo.size.width * CGFloat(min(1, max(0, progress))), height: 2)
-                        }
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    isScrubbing = true
-                                    let fraction = max(0, min(1, value.location.x / geo.size.width))
-                                    scrubTime = Double(fraction) * duration
-                                    currentTime = scrubTime
-                                }
-                                .onEnded { value in
-                                    let fraction = max(0, min(1, value.location.x / geo.size.width))
-                                    let targetTime = Double(fraction) * duration
-                                    player.seek(to: targetTime)
-                                    isScrubbing = false
-                                }
-                        )
-                    }
-                    .frame(height: 14)
-                    .background(WindowDragBlocker())
-
-                    Text(timeString(duration))
-                        .terminalFont(14)
-
-                    // Volume dial
-                    ZStack {
-                        Circle()
-                            .stroke(Color.white.opacity(0.2), lineWidth: 2)
-                        Circle()
-                            .trim(from: 0, to: CGFloat(displayVolume))
-                            .stroke(Color.white.opacity(0.5), lineWidth: 2)
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .frame(width: 14, height: 14)
-                    .contentShape(Circle())
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                if abs(value.translation.height) < 1 && abs(value.translation.width) < 1 {
-                                    dragStartVolume = displayVolume
-                                }
-                                let delta = Float(-value.translation.height / 100)
-                                let newVol = max(0, min(1, dragStartVolume + delta))
-                                displayVolume = newVol
-                                player.setVolume(newVol)
-                            }
-                    )
-                    .background(WindowDragBlocker())
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.15))
+                        .frame(height: 2)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.6))
+                        .frame(width: geo.size.width * CGFloat(min(1, max(0, progress))), height: 2)
                 }
-                .foregroundColor(.white.opacity(0.5))
-                .padding(.horizontal, 8)
-            } else {
-                Text("Nothing selected")
-                    .terminalFont(14)
-                    .foregroundColor(.white.opacity(0.2))
-                    .padding(.vertical, 2)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            isScrubbing = true
+                            let fraction = max(0, min(1, value.location.x / geo.size.width))
+                            scrubTime = Double(fraction) * duration
+                            currentTime = scrubTime
+                        }
+                        .onEnded { value in
+                            let fraction = max(0, min(1, value.location.x / geo.size.width))
+                            let targetTime = Double(fraction) * duration
+                            player.seek(to: targetTime)
+                            isScrubbing = false
+                        }
+                )
             }
+            .frame(height: 10)
+            .background(WindowDragBlocker())
+
+            // Controls row
+            HStack(spacing: 0) {
+                // Transport controls
+                HStack(spacing: 12) {
+                    Button(action: onPrevious) {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.5))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+
+                    Button(action: { player.togglePlayback() }) {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.white.opacity(0.7))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+
+                    Button(action: onNext) {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.5))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                }
+
+                Spacer().frame(width: 12)
+
+                // Track name
+                if !nowPlaying.isEmpty {
+                    Text(nowPlaying)
+                        .terminalFont(12)
+                        .foregroundColor(.white.opacity(0.4))
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    // Time
+                    Text(timeString(isScrubbing ? scrubTime : currentTime))
+                        .terminalFont(12)
+                        .foregroundColor(.white.opacity(0.3))
+                } else {
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
         }
-        .padding(6)
-        .background(Color.white.opacity(0.1))
+        .background(Color.white.opacity(0.05))
+        .background(WindowDragBlocker())
         .onAppear {
-            displayVolume = player.volume
             updateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                 if !isScrubbing {
                     currentTime = player.currentTime
@@ -193,10 +208,6 @@ struct PlayerControlsView: View {
             updateTimer?.invalidate()
             updateTimer = nil
         }
-    }
-
-    func setVolume(_ newVol: Float) {
-        displayVolume = newVol
     }
 
     private func timeString(_ time: TimeInterval) -> String {
@@ -212,6 +223,7 @@ struct ContentView: View {
     @StateObject private var browser = FileBrowser()
     @StateObject private var player = AudioPlayer()
     @State private var nowPlaying: String = ""
+    @State private var alwaysOnTop: Bool = false
 
     var body: some View {
         ZStack {
@@ -220,6 +232,9 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // Navigation header
                 HStack(spacing: 2) {
+                    // macOS traffic light spacer (approx 70pt for close/minimize/zoom)
+                    Color.clear.frame(width: 70, height: 1)
+
                     Button(action: { browser.goBack() }) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 11, weight: .bold))
@@ -228,6 +243,7 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .disabled(!browser.canGoBack)
 
                     Button(action: { browser.goForward() }) {
@@ -238,6 +254,7 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .disabled(!browser.canGoForward)
 
                     Text(browser.currentPath.lastPathComponent)
@@ -247,13 +264,25 @@ struct ContentView: View {
                         .padding(.leading, 4)
 
                     Spacer()
+
+                    // Always-on-top toggle
+                    Button(action: { alwaysOnTop.toggle() }) {
+                        Image(systemName: alwaysOnTop ? "lock.fill" : "lock.open")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(alwaysOnTop ? .white.opacity(0.9) : .white.opacity(0.3))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help(alwaysOnTop ? "Unpin window" : "Pin window on top")
                 }
                 .padding(.horizontal, 8)
                 .padding(.top, 4)
                 .padding(.bottom, 2)
                 .background(WindowDragBlocker())
 
-                // File list
+                // File list (full width)
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
@@ -269,27 +298,41 @@ struct ContentView: View {
                                         nowPlaying = playItem.displayName
                                     }
                                 )
-                                .id(index)
+                                .id(item.id)
                             }
                         }
                     }
                     .scrollIndicators(.automatic)
                     .onChange(of: browser.selectedIndex) { newIndex in
-                        if browser.selectedViaKeyboard {
+                        if browser.selectedViaKeyboard, newIndex < browser.items.count {
                             withAnimation {
-                                proxy.scrollTo(newIndex, anchor: .center)
+                                proxy.scrollTo(browser.items[newIndex].id, anchor: .center)
                             }
                         }
                     }
                 }
 
-                Divider().background(Color.white.opacity(0.2))
-
-                // Player controls
-                PlayerControlsView(player: player, nowPlaying: nowPlaying)
+                // Footer player bar
+                FooterPlayerBar(
+                    player: player,
+                    nowPlaying: nowPlaying,
+                    onPrevious: {
+                        if let item = browser.previousAudioItem() {
+                            player.play(url: item.url)
+                            nowPlaying = item.displayName
+                        }
+                    },
+                    onNext: {
+                        if let item = browser.nextAudioItem() {
+                            player.play(url: item.url)
+                            nowPlaying = item.displayName
+                        }
+                    }
+                )
             }
         }
         .background(WindowDragGesture())
+        .background(AlwaysOnTopHelper(isOnTop: alwaysOnTop))
         .focusable()
         .onAppear {
             player.setupRemoteCommands()
@@ -352,7 +395,7 @@ struct ContentView: View {
             browser.goForward()
             return .handled
         }
-        .frame(minWidth: 220, minHeight: 150)
+        .frame(minWidth: 380, minHeight: 150)
         .windowStyle()
     }
 }

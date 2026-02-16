@@ -13,7 +13,7 @@ struct mp3_playerApp: App {
         WindowGroup {
             ContentView()
         }
-        .defaultSize(width: 280, height: 300)
+        .defaultSize(width: 480, height: 300)
         .windowResizability(.contentMinSize)
     }
 }

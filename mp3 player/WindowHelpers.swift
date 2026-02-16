@@ -29,10 +29,6 @@ struct WindowDragBlocker: NSViewRepresentable {
 
 class DragBlockingView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
-
-    override func mouseDown(with event: NSEvent) {}
-    override func mouseDragged(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) {}
 }
 
 // MARK: - Window Styling
@@ -44,7 +40,6 @@ class WindowStylerView: NSView {
         super.viewDidMoveToWindow()
         applyStyle()
 
-        // Also observe in case the window changes
         windowObservation = observe(\.window, options: [.new]) { [weak self] _, _ in
             self?.applyStyle()
         }
@@ -72,5 +67,39 @@ struct WindowStyler: NSViewRepresentable {
 extension View {
     func windowStyle() -> some View {
         self.background(WindowStyler())
+    }
+}
+
+// MARK: - Always On Top
+
+class AlwaysOnTopView: NSView {
+    var isOnTop: Bool = false {
+        didSet {
+            applyLevel()
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyLevel()
+    }
+
+    private func applyLevel() {
+        guard let window = self.window else { return }
+        window.level = isOnTop ? .floating : .normal
+    }
+}
+
+struct AlwaysOnTopHelper: NSViewRepresentable {
+    var isOnTop: Bool
+
+    func makeNSView(context: Context) -> AlwaysOnTopView {
+        let view = AlwaysOnTopView()
+        view.isOnTop = isOnTop
+        return view
+    }
+
+    func updateNSView(_ nsView: AlwaysOnTopView, context: Context) {
+        nsView.isOnTop = isOnTop
     }
 }

@@ -35,6 +35,7 @@ class FileBrowser: ObservableObject {
     @Published var canGoBack: Bool = false
     @Published var canGoForward: Bool = false
     var selectedViaKeyboard: Bool = true
+    var playingIndex: Int?
     private var metadataCache: [URL: (duration: TimeInterval?, artist: String?, title: String?)] = [:]
     private var backStack: [URL] = []
     private var forwardStack: [URL] = []
@@ -54,14 +55,14 @@ class FileBrowser: ObservableObject {
         do {
             let contents = try FileManager.default.contentsOfDirectory(
                 at: currentPath,
-                includingPropertiesForKeys: [.isDirectoryKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey],
                 options: [.skipsHiddenFiles]
             )
 
             items = contents.compactMap { url in
-                var isDir: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return nil }
-                return FileItem(url: url, name: url.lastPathComponent, isDirectory: isDir.boolValue)
+                guard let resources = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey]) else { return nil }
+                let isDir = (resources.isDirectory ?? false) && !(resources.isPackage ?? false)
+                return FileItem(url: url, name: url.lastPathComponent, isDirectory: isDir)
             }
             .sorted {
                 if $0.isDirectory == $1.isDirectory {
@@ -144,10 +145,10 @@ class FileBrowser: ObservableObject {
     }
 
     func nextAudioItem() -> FileItem? {
-        for i in (selectedIndex + 1)..<items.count {
+        let startIndex = playingIndex ?? selectedIndex
+        for i in (startIndex + 1)..<items.count {
             if items[i].isAudio {
-                selectedViaKeyboard = true
-                selectedIndex = i
+                playingIndex = i
                 return items[i]
             }
         }
@@ -155,10 +156,10 @@ class FileBrowser: ObservableObject {
     }
 
     func previousAudioItem() -> FileItem? {
-        for i in stride(from: selectedIndex - 1, through: 0, by: -1) {
+        let startIndex = playingIndex ?? selectedIndex
+        for i in stride(from: startIndex - 1, through: 0, by: -1) {
             if items[i].isAudio {
-                selectedViaKeyboard = true
-                selectedIndex = i
+                playingIndex = i
                 return items[i]
             }
         }
@@ -175,6 +176,7 @@ class FileBrowser: ObservableObject {
         }
 
         if item.isAudio {
+            playingIndex = selectedIndex
             return item
         }
 
@@ -190,6 +192,7 @@ class FileBrowser: ObservableObject {
     private func navigateTo(_ url: URL) {
         backStack.append(currentPath)
         forwardStack.removeAll()
+        playingIndex = nil
         currentPath = url
         UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
         loadCurrentDirectory()
@@ -199,6 +202,7 @@ class FileBrowser: ObservableObject {
     func goBack() {
         guard let previous = backStack.popLast() else { return }
         forwardStack.append(currentPath)
+        playingIndex = nil
         currentPath = previous
         UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
         loadCurrentDirectory()
@@ -208,6 +212,7 @@ class FileBrowser: ObservableObject {
     func goForward() {
         guard let next = forwardStack.popLast() else { return }
         backStack.append(currentPath)
+        playingIndex = nil
         currentPath = next
         UserDefaults.standard.set(currentPath.absoluteString, forKey: "rootDirectory")
         loadCurrentDirectory()
