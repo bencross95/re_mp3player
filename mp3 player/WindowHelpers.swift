@@ -53,6 +53,16 @@ class WindowStylerView: NSView {
         window.styleMask.insert(.resizable)
         window.isOpaque = false
         window.backgroundColor = NSColor.black.withAlphaComponent(0.9)
+
+        // Completely remove the native titlebar
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+
+        if let titlebarContainer = window.standardWindowButton(.closeButton)?.superview?.superview {
+            titlebarContainer.frame.size.height = 0
+            titlebarContainer.isHidden = true
+        }
     }
 }
 

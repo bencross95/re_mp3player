@@ -15,5 +15,6 @@ struct mp3_playerApp: App {
         }
         .defaultSize(width: 480, height: 300)
         .windowResizability(.contentMinSize)
+        .windowStyle(.hiddenTitleBar)
     }
 }

@@ -232,9 +232,6 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // Navigation header
                 HStack(spacing: 2) {
-                    // macOS traffic light spacer (approx 70pt for close/minimize/zoom)
-                    Color.clear.frame(width: 70, height: 1)
-
                     Button(action: { browser.goBack() }) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 11, weight: .bold))
@@ -276,6 +273,29 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .help(alwaysOnTop ? "Unpin window" : "Pin window on top")
+
+                    // Window controls
+                    Button(action: { NSApplication.shared.keyWindow?.miniaturize(nil) }) {
+                        Image(systemName: "minus")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.3))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help("Minimize")
+
+                    Button(action: { NSApplication.shared.keyWindow?.close() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.3))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help("Close")
                 }
                 .padding(.horizontal, 8)
                 .padding(.top, 4)
